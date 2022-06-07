@@ -1,5 +1,7 @@
 all: build
 
+VERSION := 0.0.1
+
 # Primary targets
 build: main
 
@@ -7,7 +9,8 @@ test:
 	go test
 
 dist: main
-	tar cvf dist/release.tar.gz main
+	tar cvf dist/server-$(VERSION).tar.gz main
+	make docker
 	
 clean:
 	rm -rf dist/*
