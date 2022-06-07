@@ -8,6 +8,9 @@ build: main
 test:
 	go test
 
+deploy: deploy.yaml
+	kubectl apply -f deploy.yaml
+
 dist: main
 	tar cvf dist/server-$(VERSION).tar.gz main
 	make docker
