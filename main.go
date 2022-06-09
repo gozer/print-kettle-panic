@@ -1,62 +1,65 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
-	"log"
-	"net/http"
-	"path/filepath"
 )
 
-type KubeContext struct {
-	clientset *kubernetes.Clientset
-}
-
-func NewHandlerContext(clientset *kubernetes.Clientset) *KubeContext {
-	if clientset == nil {
-		panic("nil Kubernetes client!")
-	}
-	return &KubeContext{clientset}
-}
-
-func (ctx *KubeContext) healthzHandler(w http.ResponseWriter, r *http.Request) {
-	pods, err := ctx.clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		panic(err.Error())
-	}
-	fmt.Fprintf(w, "healthz: OK There are %d pods in the cluster\n", len(pods.Items))
-}
-
 func main() {
-	var kubeconfig *string
-	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	err := run(os.Args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v", err)
 	}
+}
+
+func run(args []string) error {
+	homedir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	var port, kubeconfig string
+	flag.StringVar(&port, "port", "8080", "server port")
+	flag.StringVar(&kubeconfig, "kubeconfig", filepath.Join(homedir, ".kube", "config"), "path to the kubeconfig file")
 	flag.Parse()
 
 	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		panic(err.Error())
+		return err
 	}
 
 	// create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
-	kubectx := NewHandlerContext(clientset)
+	if err != nil {
+		return err
+	}
 
-	mux := http.NewServeMux()
+	// add handlers
+	http.Handle("/healthz", &healthzHandler{clientset: clientset})
+	http.Handle("/metrics", http.NotFoundHandler()) // TODO: add metrics
 
-	// XXX: Not there yet
-	mux.Handle("/metrics", http.NotFoundHandler())
+	return http.ListenAndServe(":"+port, nil)
+}
 
-	mux.HandleFunc("/healthz", kubectx.healthzHandler)
+// healthzHandler is an HTTP handler for the healthz API.
+type healthzHandler struct {
+	clientset *kubernetes.Clientset
+}
 
-	log.Fatal(http.ListenAndServe(":8080", mux))
+// ServeHTTP implements http.Handler
+func (kc *healthzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	pods, err := kc.clientset.CoreV1().Pods("").List(r.Context(), metav1.ListOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	fmt.Fprintf(w, "healthz: OK\nThere are %d pods in the cluster\n", len(pods.Items))
 }
